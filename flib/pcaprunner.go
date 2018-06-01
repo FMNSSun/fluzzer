@@ -3,12 +3,16 @@ package flib
 import "github.com/google/gopacket/pcap"
 import "github.com/google/gopacket"
 import "os/exec"
-//import "time"
+import "time"
 import "net"
+
 
 type RunnerContext struct {
 	FuzzingContext *FuzzingContext
-	Cmd *exec.Cmd
+	CmdWait chan bool
+	RepeatUntilCrash bool
+	PacketLogger func([]byte) error
+	SendDelay int
 }
 
 func getSerializableLayers(packet gopacket.Packet) []gopacket.SerializableLayer {
@@ -85,18 +89,7 @@ func RunPCAPSimple(in *pcap.Handle, out *pcap.Handle, ctx *RunnerContext) error 
 	return nil
 }
 
-func RunPCAPPacketConn(addr net.Addr, pconn net.PacketConn, layerType gopacket.LayerType, in *pcap.Handle, out *pcap.Handle, ctx *RunnerContext) (bool, error) {
-	cmd := ctx.Cmd
-	
-	waitCh := make(chan bool)
-
-	go func() {
-		if cmd != nil {
-			cmd.Wait()
-			waitCh <- true
-		}
-	}()
-
+func RunPCAPPacketConn(addr net.Addr, pconn net.PacketConn, layerType gopacket.LayerType, in *pcap.Handle, ctx *RunnerContext) (bool, error) {
 	packetSource := gopacket.NewPacketSource(in, in.LinkType())	
 
 	for packet := range packetSource.Packets() {
@@ -106,8 +99,16 @@ func RunPCAPPacketConn(addr net.Addr, pconn net.PacketConn, layerType gopacket.L
 
 		pconn.WriteTo(data, addr)
 
+		if ctx.SendDelay > 0 {
+			time.Sleep(time.Duration(ctx.SendDelay) * time.Millisecond)
+		}
+
+		if ctx.PacketLogger != nil {
+			ctx.PacketLogger(data)
+		}
+
 		select {
-		case _ = <- waitCh:
+		case _ = <- ctx.CmdWait:
 			// process has terminated
 			return true, nil
 		default:
