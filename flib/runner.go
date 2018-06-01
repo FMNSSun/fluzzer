@@ -2,17 +2,15 @@ package flib
 
 import "github.com/google/gopacket/pcap"
 import "github.com/google/gopacket"
-import "os/exec"
 import "time"
 import "net"
 
-
 type RunnerContext struct {
-	FuzzingContext *FuzzingContext
-	CmdWait chan bool
+	FuzzingContext   *FuzzingContext
+	CmdWait          chan bool
 	RepeatUntilCrash bool
-	PacketLogger func([]byte) error
-	SendDelay int
+	PacketLogger     func([]byte) error
+	SendDelay        int
 }
 
 func getSerializableLayers(packet gopacket.Packet) []gopacket.SerializableLayer {
@@ -89,45 +87,41 @@ func RunPCAPSimple(in *pcap.Handle, out *pcap.Handle, ctx *RunnerContext) error 
 	return nil
 }
 
-func RunPCAPPacketConn(addr net.Addr, pconn net.PacketConn, layerType gopacket.LayerType, in *pcap.Handle, ctx *RunnerContext) (bool, error) {
-	packetSource := gopacket.NewPacketSource(in, in.LinkType())	
+func RunPacketConn(packetSource *gopacket.PacketSource, addr net.Addr, pconn net.PacketConn, layerType gopacket.LayerType, ctx *RunnerContext) (bool, error) {
 
 	for packet := range packetSource.Packets() {
 		FuzzPacket(packet, ctx.FuzzingContext)
 
 		data := serializePacketEx(layerType, packet)
 
-		pconn.WriteTo(data, addr)
+		_, err := pconn.WriteTo(data, addr)
 
-		if ctx.SendDelay > 0 {
-			time.Sleep(time.Duration(ctx.SendDelay) * time.Millisecond)
+		if err != nil {
+			return false, err
 		}
 
 		if ctx.PacketLogger != nil {
 			ctx.PacketLogger(data)
 		}
 
+		if ctx.SendDelay > 0 {
+			time.Sleep(time.Duration(ctx.SendDelay) * time.Millisecond)
+		}
+
 		select {
-		case _ = <- ctx.CmdWait:
+		case _ = <-ctx.CmdWait:
 			// process has terminated
 			return true, nil
 		default:
 			// nop
 		}
+
 	}
 
 	return false, nil
 }
 
-func RunPCAPCCmd(in *pcap.Handle, out *pcap.Handle, cmd *exec.Cmd, ctx *RunnerContext) (bool, error) {
-	waitCh := make(chan bool)
-
-	go func() {
-		cmd.Wait()
-		waitCh <- true
-	}()
-
-	packetSource := gopacket.NewPacketSource(in, in.LinkType())
+func Run(packetSource *gopacket.PacketSource, out *pcap.Handle, ctx *RunnerContext) (bool, error) {
 
 	for packet := range packetSource.Packets() {
 		FuzzPacket(packet, ctx.FuzzingContext)
@@ -138,21 +132,30 @@ func RunPCAPCCmd(in *pcap.Handle, out *pcap.Handle, cmd *exec.Cmd, ctx *RunnerCo
 		opts := gopacket.SerializeOptions{}
 
 		gopacket.SerializeLayers(buf, opts, serLayers...)
+		data := buf.Bytes()
 
-		err := out.WritePacketData(buf.Bytes())
+		err := out.WritePacketData(data)
 
 		if err != nil {
-			return false, err
+			return false, nil
+		}
+
+		if ctx.PacketLogger != nil {
+			ctx.PacketLogger(data)
+		}
+
+		if ctx.SendDelay > 0 {
+			time.Sleep(time.Duration(ctx.SendDelay) * time.Millisecond)
 		}
 
 		select {
-		case _ = <- waitCh:
+		case _ = <-ctx.CmdWait:
 			// process has terminated
 			return true, nil
 		default:
 			// nop
 		}
-		
+
 	}
 
 	return false, nil

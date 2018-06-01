@@ -5,13 +5,14 @@ import "os/exec"
 import "net"
 import "github.com/google/gopacket/pcap"
 import "github.com/google/gopacket/layers"
+import "github.com/google/gopacket"
 
 func FuzzPacketConnPCAP(path string, run string, args []string, laddr string, raddr string, ctx *RunnerContext) error {
 	cmd := exec.Command(run, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err := cmd.Start()
-	
+
 	if err != nil {
 		panic(err.Error())
 	}
@@ -37,7 +38,9 @@ func FuzzPacketConnPCAP(path string, run string, args []string, laddr string, ra
 			return err
 		}
 
-		crashed, err := RunPCAPPacketConn(udpAddr, packetConn, layers.LayerTypePLUS, in, ctx)
+		packetSource := gopacket.NewPacketSource(in, in.LinkType())
+
+		crashed, err := RunPacketConn(packetSource, udpAddr, packetConn, layers.LayerTypePLUS, ctx)
 		in.Close()
 
 		if err != nil {
